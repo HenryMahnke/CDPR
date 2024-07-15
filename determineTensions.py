@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+from scipy.optimize import linprog
 
 def attachment_points_workspace(attachment_points, position):
     return attachment_points + position
@@ -59,6 +59,45 @@ def calculate_cable_forces(stands, attachment_points,position,payload_mass, acce
     forces = unit_vectors * tensions[:, np.newaxis]
     return forces, tensions
 
+def calculate_cable_forces_linprog(stands, attachment_points, position, payload_mass, acceleration, max_tension):
+    cables = find_cables(stands, attachment_points, position)
+    attach_wrk = attachment_points_workspace(attachment_points, position)
+    cable_lengths = np.linalg.norm(cables, axis=1)
+    unit_vectors = cables / cable_lengths[:, np.newaxis]
+    
+    A = unit_vectors.T  # 3x4 matrix
+    
+    # Calculate external force (weight + inertial force)
+    weight = np.array([0, 0, -payload_mass * 9.81])
+    inertial_force = payload_mass * acceleration
+    B = weight + inertial_force
+    
+    num_cables = len(stands)
+    
+    # Objective function: Minimize t
+    c = np.hstack([np.zeros(num_cables), 1])
+    
+    # Inequality constraints: x_i <= t and -x_i <= 0 (must be positive for tension)
+    A_ub = np.vstack([np.hstack([np.eye(num_cables), -np.ones((num_cables, 1))]),
+                      np.hstack([-np.eye(num_cables), np.zeros((num_cables, 1))])])
+    b_ub = np.zeros(2 * num_cables)
+    
+    # Equality constraints: Ax = B
+    A_eq = np.hstack([A, np.zeros((A.shape[0], 1))])
+    b_eq = B
+    
+    # Bounds for variables
+    bounds = [(0, max_tension) for _ in range(num_cables)] + [(0, None)]  # Last bound is for t
+    
+    # Solve the linear programming problem
+    res = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+    
+    if res.success:
+        tensions = res.x[:num_cables]
+        return tensions
+    else:
+        return None
+
 def find_workspace(stands,attachment_points,acceleration,max_tension,min_tension,payload_mass):
     x = np.linspace(0, 5, 20)
     y = np.linspace(0, 5, 20)
@@ -68,11 +107,10 @@ def find_workspace(stands,attachment_points,acceleration,max_tension,min_tension
         for yi in y:
             for zi in z:
                 pos = np.array([xi, yi, zi])
-                force,tensions = calculate_cable_forces(stands, attachment_points, pos, payload_mass, acceleration)
-                # and need to find length
-                is_feasible = np.all((tensions >= min_tension) & (tensions <= max_tension))
-                if is_feasible:
+                tensions = calculate_cable_forces_linprog(stands, attachment_points, pos, payload_mass, acceleration, max_tension)
+                if tensions is not None:
                     feasible_workspace.append(pos)
+
     feasible_workspace = np.array(feasible_workspace)
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -104,9 +142,9 @@ attachment_points = np.array([
     [0.25,0.25,0.25]
 ])
 # acceleration vector of the payload
-acceleration = np.array([0,0,-2]) # gravity already accounted for
+acceleration = np.array([0,0,0]) # gravity already accounted for
 position = np.array([2.5,2.5,2.5]) # meters
-max_motor_torque = 2 # Newton meters
+max_motor_torque = 1.5 # Newton meters
 radius_drums = 0.1 # meters
 max_cable_tension = max_motor_torque / radius_drums
 print(max_cable_tension)
