@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import linprog
 
+
+
+        
 def attachment_points_workspace(attachment_points, position):
     return attachment_points + position
 # plot the payload and attachment points, stands, and vectors 
@@ -103,6 +106,7 @@ def find_workspace(stands,attachment_points,acceleration,max_tension,min_tension
     y = np.linspace(0, 5, 20)
     z = np.linspace(0, 3, 20)
     feasible_workspace = []
+    tension_values = []
     for xi in x:
         for yi in y:
             for zi in z:
@@ -110,22 +114,25 @@ def find_workspace(stands,attachment_points,acceleration,max_tension,min_tension
                 tensions = calculate_cable_forces_linprog(stands, attachment_points, pos, payload_mass, acceleration, max_tension)
                 if tensions is not None:
                     feasible_workspace.append(pos)
+                    tension_values.append(np.max(tensions))
 
     feasible_workspace = np.array(feasible_workspace)
+    tension_values = np.array(tension_values)
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(feasible_workspace[:, 0], feasible_workspace[:, 1], feasible_workspace[:, 2], 
-                   color='b', marker='o', s=2, alpha=0.6)
+    scatter = ax.scatter(feasible_workspace[:, 0], feasible_workspace[:, 1], feasible_workspace[:, 2], 
+                   c=tension_values,cmap ='viridis', marker='o', s=10, alpha=0.8)
     ax.scatter(stands[:,0], stands[:,1], stands[:,2], color='r', marker='^', s=100, label='Stand Positions')
+    cbar = fig.colorbar(scatter)
+    cbar.set_label('Max Tension (N)',rotation = 270, alpha = 0.8)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title('Feasible Workspace')
+    ax.set_title(f'Feasible Workspace with mass {payload_mass} kg')
     plt.show()
     
 # should change to use linprog for finding tension 
 
-payload_mass = 1 # kg
 payload_size = 0.5 # meters
 robot_size = [5,5,3] # meters
 stands = np.array([
@@ -144,15 +151,28 @@ attachment_points = np.array([
 # acceleration vector of the payload
 acceleration = np.array([0,0,0]) # gravity already accounted for
 position = np.array([2.5,2.5,2.5]) # meters
-max_motor_torque = 1.5 # Newton meters
-radius_drums = 0.1 # meters
-max_cable_tension = max_motor_torque / radius_drums
+max_motor_torque_oz_in = 44 # Newton meters
+max_motor_torque = max_motor_torque_oz_in * 0.00706155 # Newton meters
+gearRatio = 20
+motor_rpm = 2500
+payload_mass = 8 # kg
+drumRotationRate = motor_rpm/gearRatio
+radius_drums = 0.0762 # meters
+maxPayloadSpeed = drumRotationRate *radius_drums * 2 * np.pi/60
+print(maxPayloadSpeed) # meters per second
+max_torque = max_motor_torque * gearRatio # Newton meters
+max_cable_tension = max_torque / radius_drums
 print(max_cable_tension)
 min_tension = 0 # Newtons
 max_cable_length = 10
 min_cable_length = 0.1
+spool_length = 6 #inches
+cable_diameter = 3/32 # inches
+radius_drums = 2 #inches
+num_turns = spool_length/(cable_diameter)
+total_cable_length = radius_drums * 2 * np.pi * num_turns/12
 
-
+print(total_cable_length)
 # calculate the direction vector
 # print(calculate_cable_forces(stands, attachment_points, position, payload_mass, acceleration))
 # plot(stands, attachment_points, position)
