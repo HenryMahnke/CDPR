@@ -1,6 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import linprog
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import splineTraj as st
 
 class CDPR:
     def __init__(self, stands, attachment_points, payload_mass, payload_size, robot_size,
@@ -165,6 +169,82 @@ class CDPR:
         total_cable_length_ft = total_cable_length_m * 3.28084 #feet
         print(f"Total Cable Length: {total_cable_length_m:.2f} m ({total_cable_length_ft:.2f} ft)")
         pass
+    def follow_trajectory(self, trajectory_generator, num_points=100):
+        times = np.linspace(0, trajectory_generator.total_time, num_points)
+        print(times)
+        positions = []
+        tensions = []
+        velocities = []
+        accelerations = []
+        badTensions = [] 
+        
+        for t in times:
+            position = trajectory_generator.get_position(t)
+            velocity = trajectory_generator.get_velocity(t)
+            acceleration = trajectory_generator.get_acceleration(t)
+            cable_tensions = self.calculate_cable_forces_linprog(position, acceleration)
+
+            positions.append(position)
+            tensions.append(cable_tensions)
+            velocities.append(velocity)
+            accelerations.append(acceleration)
+            if cable_tensions is None:
+                badTensions.append(position)
+                print(f"Failed to find cable tensions at time {t:.2f}")
+                break
+        print(badTensions)
+        return np.array(positions), np.array(tensions), np.array(velocities),np.array(accelerations), times
+
+    def animate_trajectory(self, trajectory_generator):
+        positions, tensions, velocities, accelerations, times  = self.follow_trajectory(trajectory_generator)
+        
+        fig = plt.figure(figsize=(15, 10))
+        ax1 = fig.add_subplot(121, projection='3d')
+        ax2 = fig.add_subplot(122)
+        
+        ax1.set_xlim(0, self.robot_size[0])
+        ax1.set_ylim(0, self.robot_size[1])
+        ax1.set_zlim(0, self.robot_size[2])
+        ax1.set_xlabel('X')
+        ax1.set_ylabel('Y')
+        ax1.set_zlabel('Z')
+        
+        # Plot stands
+        ax1.scatter(self.stands[:,0], self.stands[:,1], self.stands[:,2], color='r', marker='^', s=100)
+        
+        # Initialize plots
+        payload, = ax1.plot([], [], [], 'bo', markersize=10)
+        cables = [ax1.plot([], [], [], 'k-')[0] for _ in range(len(self.stands))]
+        
+        tension_lines = [ax2.plot([], [], label=f'Cable {i+1}')[0] for i in range(len(self.stands))]
+        ax2.set_xlim(0, trajectory_generator.total_time)
+        ax2.set_ylim(0, np.max(tensions) * 1.1)
+        ax2.set_xlabel('Time (s)')
+        ax2.set_ylabel('Tension (N)')
+        ax2.legend()
+        
+        def update(frame):
+            position = positions[frame]
+            attach = self.attachment_points_workspace(position)
+            
+            # Update payload position
+            payload.set_data(position[0], position[1])
+            payload.set_3d_properties(position[2])
+            
+            # Update cable positions
+            for i, cable in enumerate(cables):
+                cable.set_data([self.stands[i,0], attach[i,0]], [self.stands[i,1], attach[i,1]])
+                cable.set_3d_properties([self.stands[i,2], attach[i,2]])
+            
+            # Update tension plot
+            for i, line in enumerate(tension_lines):
+                line.set_data(times[:frame+1], tensions[:frame+1, i])
+            
+            return [payload] + cables + tension_lines
+        
+        anim = FuncAnimation(fig, update, frames=len(positions), interval=trajectory_generator.total_time/len(positions)*100, blit=True)
+        plt.tight_layout()
+        plt.show()
         
 
 # Example usage:
@@ -182,11 +262,12 @@ attachment_points = np.array([
     [-0.25,0.25,0.25],
     [0.25,0.25,0.25]
 ])
+# relative to center of payload
 thruster_positions = np.array([
-    [0,0,0],
-    [5,0,0],
-    [0,5,0],
-    [5,5,0]
+    [-0.25,-0.25,0.25],
+    [0.25,-0.25,0.25],
+    [-0.25,0.25,0.25],
+    [0.25,0.25,0.25]
 ])
 position_offSet = np.array(
     [0,0,3]
@@ -209,13 +290,120 @@ cable_diameter_m = cable_diameter_in * inch_to_meters  # meters
 
 cdpr = CDPR(stands, attachment_points, payload_mass, payload_size, robot_size,
             max_motor_torque_oz_in, gear_ratio, motor_rpm, drum_radius_m,spool_length_m,cable_diameter_m)
-cdpr.determineCharacteristics()
+# cdpr.determineCharacteristics()
 # Plot the CDPR
-cdpr.plot(np.array([2.5, 2.5, 2.5]))
+# cdpr.plot(np.array([2.5, 2.5, 2.5]))
 
 # Find and plot the workspace
 acceleration = np.array([0,0,0])
 cdpr.find_workspace(acceleration)
+generator = st.SplineTrajectoryGenerator3D(0.75, 0.75)
+generator.add_point(0.75, 0.75, 0.5)
+generator.add_point(4, 0.75, 0.5)
+generator.add_point(4, 4, 0.5)
+generator.add_point(0.75, 4, 0.5)
+
+
+generator.generate_spline()
+generator.plot_trajectory()
+cdpr.animate_trajectory(generator)
 def generateTraj(start,end):
     return np.linspace(start,end,100)
+
+
+# TODO
+"""
+add thrusters to model
+add thruster positions to model
+add offset to position
+add center of mass position offset to model as well
+add path following and graphs of torques, velocities, positions over time
+add text to spline
+"""
+# want to add a way to have a stream of thrust forces with time
+def thrusters():
+    # we want to take the position of the thrusters, relative to the center of mass, and determine the force and moment they produce
+    thrust_force = np.array((0, 0.1, 0))  # N 
+    thrust_duration = 1  # s
+    print(thruster_positions[0])
+    tau = np.cross(np.array((2, 1, 3)), thrust_force)
+    print(tau)
+    # with torque, determine angular acceleration
+    I = np.array((2, 2, 2))  # kg*m^2
+    # calculate angular acceleration (alpha = torque / I)
+    alpha = tau / I
     
+    dt = 0.1
+    t_total = 10
+    time_steps = np.arange(0, t_total, dt)
+    
+    n_steps = len(time_steps)
+    omega = np.zeros((n_steps, 3))
+    theta = np.zeros((n_steps, 3))
+    for i in range(1, len(time_steps)):
+        omega[i] = omega[i - 1] + alpha * dt
+        theta[i] = theta[i - 1] + omega[i] * dt
+        
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_zlim(-2, 2)
+    
+    cube = np.array([[-0.5, -0.5, -0.5],
+                     [ 0.5, -0.5, -0.5],
+                     [ 0.5,  0.5, -0.5],
+                     [-0.5,  0.5, -0.5],
+                     [-0.5, -0.5,  0.5],
+                     [ 0.5, -0.5,  0.5],
+                     [ 0.5,  0.5,  0.5],
+                     [-0.5,  0.5,  0.5]])
+    faces = [[0, 1, 5, 4],
+             [1, 2, 6, 5],
+             [2, 3, 7, 6],
+             [3, 0, 4, 7],
+             [0, 1, 2, 3],
+             [4, 5, 6, 7]]
+    
+    def rotation_matrix_x(theta):
+        return np.array([[1, 0, 0],
+                         [0, np.cos(theta), -np.sin(theta)],
+                         [0, np.sin(theta), np.cos(theta)]])
+    
+    def rotation_matrix_y(theta):
+        return np.array([[np.cos(theta), 0, np.sin(theta)],
+                         [0, 1, 0],
+                         [-np.sin(theta), 0, np.cos(theta)]])
+    
+    def rotation_matrix_z(theta):
+        return np.array([[np.cos(theta), -np.sin(theta), 0],
+                         [np.sin(theta), np.cos(theta), 0],
+                         [0, 0, 1]])
+    
+    def rotate(points, theta):
+        Rx = rotation_matrix_x(theta[0])
+        Ry = rotation_matrix_y(theta[1])
+        Rz = rotation_matrix_z(theta[2])
+        R = np.dot(Rz, np.dot(Ry, Rx))
+        return np.dot(points, R.T)
+    
+    def update(frame):
+        ax.cla()
+        ax.set_xlim(-2, 2)
+        ax.set_ylim(-2, 2)
+        ax.set_zlim(-2, 2)
+        theta_t = theta[frame]
+        rotated_cube = rotate(cube, theta_t)
+        face_vertices = [rotated_cube[face] for face in faces]
+        face_collection = Poly3DCollection(face_vertices, color='b', alpha=0.5)
+        ax.add_collection3d(face_collection)
+        return ax
+    
+    ani = FuncAnimation(fig, update, frames=len(time_steps),interval = 1, blit=False)
+    plt.show()
+    # we want to take the position of the thrusters, relative to the center of mass, and determine the force and moment they produce
+    # we can use the following equationsq
+    # F = ma
+    # M = Ia
+    # where F is the force, M is the moment, I is the moment of inertia, a is the acceleration, and m is the mass
+    # we can also use the following equations
